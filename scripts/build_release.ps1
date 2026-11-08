@@ -55,24 +55,24 @@ function Build-LibimobiledeviceWithMsys2 {
 
     $SrcRoot = Join-Path $BuildDir "libimobiledevice-src"
     New-Item -ItemType Directory -Force -Path $SrcRoot | Out-Null
-    $InstallPrefix = Join-Path $BuildDir "libimobiledevice-prefix"
-    New-Item -ItemType Directory -Force -Path $InstallPrefix | Out-Null
+    New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
 
-    $MsysSrcRoot = ($SrcRoot -replace '\\', '/') -replace '^([A-Za-z]):', '/$1'
-    $MsysPrefix = ($InstallPrefix -replace '\\', '/') -replace '^([A-Za-z]):', '/$1'
-
-    $BashScript = @"
+    $BashScript = @'
 set -euo pipefail
+
 pacman -S --needed --noconfirm \
     base-devel git make libtool autoconf automake-wrapper \
-    mingw-w64-x86_64-gcc mingw-w64-x86_64-pkg-config mingw-w64-x86_64-openssl
+    mingw-w64-x86_64-gcc mingw-w64-x86_64-pkg-config \
+    mingw-w64-x86_64-openssl mingw-w64-x86_64-curl
 
-export PATH="/mingw64/bin:`$PATH"
-export PKG_CONFIG_PATH="$MsysPrefix/lib/pkgconfig:/mingw64/lib/pkgconfig"
-export CPPFLAGS="-I$MsysPrefix/include"
-export LDFLAGS="-L$MsysPrefix/lib"
+export PATH="/mingw64/bin:/usr/bin:$PATH"
+export PKG_CONFIG_PATH="/mingw64/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+export ACLOCAL_PATH="/mingw64/share/aclocal:/usr/share/aclocal:${ACLOCAL_PATH:-}"
 
-cd "$MsysSrcRoot"
+SRC_DIR="$(cygpath -u "$WIN_SRC_ROOT")"
+DEST_BIN="$(cygpath -u "$WIN_BIN_DIR")"
+mkdir -p "$SRC_DIR" "$DEST_BIN"
+cd "$SRC_DIR"
 
 repos=(
     "libplist"
@@ -82,39 +82,66 @@ repos=(
     "libimobiledevice"
 )
 
-for repo in "`${repos[@]}"; do
-    if [ -d "`$repo/.git" ]; then
-        echo "--> Pulling latest `$repo..."
-        git -C "`$repo" pull --ff-only
+for repo in "${repos[@]}"; do
+    echo "=========================================="
+    echo "Building $repo..."
+    echo "=========================================="
+    if [ -d "$repo/.git" ]; then
+        git -C "$repo" fetch --tags --force
+        git -C "$repo" pull --ff-only
     else
-        echo "--> Cloning `$repo..."
-        git clone --depth 1 "https://github.com/libimobiledevice/`$repo.git" "`$repo"
+        git clone "https://github.com/libimobiledevice/$repo.git" "$repo"
     fi
-    pushd "`$repo"
-    ./autogen.sh --prefix="$MsysPrefix" --without-cython
-    make -j"`$(nproc)"
+
+    pushd "$repo"
+    extra_flags="--without-cython"
+    if [ "$repo" = "libimobiledevice" ]; then
+        extra_flags="--without-cython --without-readline"
+    fi
+    ./autogen.sh --prefix=/mingw64 CC=gcc CXX=g++ $extra_flags
+    make -j"$(nproc)"
     make install
     popd
 done
-"@
+
+exes=(
+    "afcclient.exe"
+    "idevice_id.exe"
+    "idevicename.exe"
+    "ideviceinfo.exe"
+    "idevicepair.exe"
+)
+
+for exe in "${exes[@]}"; do
+    cp -f "/mingw64/bin/$exe" "$DEST_BIN/"
+    ldd "/mingw64/bin/$exe" | awk '/=> \/mingw64\/bin\// { print $3 }' | while read -r dll; do
+        if [ -n "$dll" ] && [ -f "$dll" ]; then
+            cp -f "$dll" "$DEST_BIN/"
+        fi
+    done
+done
+'@
 
     $Env:MSYSTEM = "MINGW64"
     $Env:CHERE_INVOKING = "1"
-    & $BashExe -lc $BashScript
+    $Env:WIN_SRC_ROOT = $SrcRoot
+    $Env:WIN_BIN_DIR = $BinDir
 
-    $BuiltBin = Join-Path $InstallPrefix "bin"
-    $MingwBin = Join-Path $Msys2Root "mingw64\bin"
+    # Strip CR from CRLF so bash does not fail on carriage returns
+    $NormalizedBashScript = $BashScript -replace "`r`n", "`n"
+    & $BashExe -lc $NormalizedBashScript
+    if ($LASTEXITCODE -ne 0) {
+        throw "MSYS2 build of libimobiledevice failed with exit code $LASTEXITCODE."
+    }
 
-    New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
     foreach ($f in $RequiredFiles) {
-        $cand1 = Join-Path $BuiltBin $f
-        $cand2 = Join-Path $MingwBin $f
-        if (Test-Path $cand1) {
-            Copy-Item $cand1 -Destination (Join-Path $BinDir $f) -Force
-        } elseif (Test-Path $cand2) {
-            Copy-Item $cand2 -Destination (Join-Path $BinDir $f) -Force
-        } else {
-            throw "Required runtime binary '$f' was not found after building libimobiledevice."
+        if (-not (Test-Path (Join-Path $BinDir $f))) {
+            $MingwCandidate = Join-Path $Msys2Root "mingw64\bin\$f"
+            if (Test-Path $MingwCandidate) {
+                Copy-Item $MingwCandidate -Destination (Join-Path $BinDir $f) -Force
+            } else {
+                throw "Required runtime binary '$f' was not found after building libimobiledevice."
+            }
         }
     }
 }
@@ -164,6 +191,9 @@ if ($PyInstaller) {
         --workpath (Join-Path $BuildDir "pyinstaller") `
         --specpath $BuildDir `
         (Join-Path $RepoRoot "move_ios_media.py")
+    if ($LASTEXITCODE -ne 0) {
+        throw "PyInstaller failed with exit code $LASTEXITCODE."
+    }
     New-Item -ItemType Directory -Force -Path (Join-Path $StagingDir "bin") | Out-Null
 } else {
     $CscPath = "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
