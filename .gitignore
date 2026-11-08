@@ -1,2 +1,28 @@
+# Virtual environments
 .venv/
+venv/
+env/
+
+# Python cache & packaging metadata
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+
+# Compiled binaries, build outputs, and release artifacts
+bin/
+build/
+dist/
+*.exe
+*.dll
+*.spec
+
+# Runtime temporary media staging directory
 temp_iphone_media/
+
+# IDE and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
