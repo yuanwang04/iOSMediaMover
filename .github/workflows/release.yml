@@ -2,6 +2,8 @@ name: Build and Release Windows Package
 
 on:
   push:
+    branches:
+      - master
     tags:
       - "v*"
   workflow_dispatch:
@@ -21,7 +23,6 @@ jobs:
         with:
           msystem: MINGW64
           update: true
-          location: C:\msys64
           install: >-
             base-devel
             git
@@ -34,6 +35,69 @@ jobs:
             mingw-w64-x86_64-openssl
             mingw-w64-x86_64-curl
 
+      - name: Build libimobiledevice from Upstream Source (MSYS2 MINGW64)
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+          export PATH="/mingw64/bin:/usr/bin:$PATH"
+          export PKG_CONFIG="/mingw64/bin/pkg-config"
+          export PKG_CONFIG_PATH="/mingw64/lib/pkgconfig:/mingw64/share/pkgconfig"
+          export ACLOCAL_PATH="/mingw64/share/aclocal:/usr/share/aclocal"
+
+          echo "Verifying libcurl and openssl via pkg-config..."
+          $PKG_CONFIG --modversion libcurl
+          $PKG_CONFIG --modversion openssl
+
+          WORK_ROOT="$(pwd)"
+          DEST_BIN="$WORK_ROOT/bin"
+          SRC_DIR="$WORK_ROOT/build/libimobiledevice-src"
+          mkdir -p "$DEST_BIN" "$SRC_DIR"
+          cd "$SRC_DIR"
+
+          repos=(
+            "libplist"
+            "libimobiledevice-glue"
+            "libusbmuxd"
+            "libtatsu"
+            "libimobiledevice"
+          )
+
+          for repo in "${repos[@]}"; do
+            echo "=========================================="
+            echo "Cloning & Building $repo..."
+            echo "=========================================="
+            rm -rf "$repo"
+            git clone "https://github.com/libimobiledevice/$repo.git" "$repo"
+            pushd "$repo"
+            extra_flags="--without-cython"
+            if [ "$repo" = "libimobiledevice" ]; then
+              extra_flags="--without-cython --without-readline"
+            fi
+            ./autogen.sh --prefix=/mingw64 CC=gcc CXX=g++ PKG_CONFIG="$PKG_CONFIG" $extra_flags
+            make -j"$(nproc)"
+            make install
+            popd
+          done
+
+          exes=(
+            "afcclient.exe"
+            "idevice_id.exe"
+            "idevicename.exe"
+            "ideviceinfo.exe"
+            "idevicepair.exe"
+          )
+
+          for exe in "${exes[@]}"; do
+            cp -f "/mingw64/bin/$exe" "$DEST_BIN/"
+            ldd "/mingw64/bin/$exe" | awk '/=> \/mingw64\/bin\// { print $3 }' | while read -r dll; do
+              if [ -n "$dll" ] && [ -f "$dll" ]; then
+                cp -f "$dll" "$DEST_BIN/"
+              fi
+            done
+          done
+
+          ls -lh "$DEST_BIN"
+
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
@@ -42,10 +106,10 @@ jobs:
       - name: Install PyInstaller
         run: python -m pip install --upgrade pip pyinstaller
 
-      - name: Pull & Build libimobiledevice and Package Release
+      - name: Package Windows Release Archive
         shell: pwsh
         run: |
-          ./scripts/build_release.ps1 -BuildLibimobiledeviceFromSource -Msys2Root "C:\msys64"
+          ./scripts/build_release.ps1
 
       - name: Upload Release Artifact
         uses: actions/upload-artifact@v4

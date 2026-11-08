@@ -66,8 +66,9 @@ pacman -S --needed --noconfirm \
     mingw-w64-x86_64-openssl mingw-w64-x86_64-curl
 
 export PATH="/mingw64/bin:/usr/bin:$PATH"
-export PKG_CONFIG_PATH="/mingw64/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
-export ACLOCAL_PATH="/mingw64/share/aclocal:/usr/share/aclocal:${ACLOCAL_PATH:-}"
+export PKG_CONFIG="/mingw64/bin/pkg-config"
+export PKG_CONFIG_PATH="/mingw64/lib/pkgconfig:/mingw64/share/pkgconfig"
+export ACLOCAL_PATH="/mingw64/share/aclocal:/usr/share/aclocal"
 
 SRC_DIR="$(cygpath -u "$WIN_SRC_ROOT")"
 DEST_BIN="$(cygpath -u "$WIN_BIN_DIR")"
